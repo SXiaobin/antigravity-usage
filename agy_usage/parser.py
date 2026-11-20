@@ -479,6 +479,41 @@ def _title_from_strings(payload_rows: List[tuple]) -> Optional[str]:
     return None
 
 
+def _load_summary_titles(conversations_dir: str) -> Dict[str, str]:
+    """Load UI-generated conversation titles from sibling conversation_summaries.db."""
+    summaries_db = os.path.join(
+        os.path.dirname(os.path.abspath(conversations_dir)),
+        "conversation_summaries.db",
+    )
+    if not os.path.isfile(summaries_db):
+        return {}
+    titles: Dict[str, str] = {}
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(f"file:{quote(summaries_db)}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT conversation_id, title, preview FROM conversation_summaries"
+        ).fetchall()
+        for conv_id, title, preview in rows:
+            if not isinstance(conv_id, str) or not conv_id:
+                continue
+            raw = (title if isinstance(title, str) else "").strip() or (
+                preview if isinstance(preview, str) else ""
+            ).strip()
+            clean = " ".join(raw.split())
+            if clean:
+                titles[conv_id] = clean
+    except _ROW_ERRORS as exc:
+        logger.debug("Skipping conversation_summaries.db in %s: %s", summaries_db, exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return titles
+
+
 def _extract_title(cursor: sqlite3.Cursor, db_path: str) -> Optional[str]:
     """Stage 3: session title from the initial steps, or None if none is found."""
     try:
@@ -708,6 +743,7 @@ class AntigravityParser:
             reverse=True,
         )
 
+        summary_titles = _load_summary_titles(dir_path)
         sessions: List[SessionSummary] = []
         for db_file in db_files:
             summary = None
@@ -717,10 +753,14 @@ class AntigravityParser:
                 fp = file_fingerprint(db_file, st=st) if st is not None else None
                 summary = cache.get(db_file, source, fingerprint=fp)
             if summary is None:
-                summary, complete = cls._parse_session_db_checked(db_file, source=source)
+                summary, complete = cls._parse_session_db_checked(
+                    db_file, source=source, summary_titles=summary_titles
+                )
                 if summary and complete and fp is not None and cache is not None:
                     cache.put(db_file, summary, fp)
             if summary:
+                if summary.session_id in summary_titles:
+                    summary.title = summary_titles[summary.session_id]
                 sessions.append(summary)
         return sessions
 
@@ -800,7 +840,10 @@ class AntigravityParser:
 
     @classmethod
     def _parse_session_db_checked(
-        cls, db_path: str, source: str = "cli"
+        cls,
+        db_path: str,
+        source: str = "cli",
+        summary_titles: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[SessionSummary], bool]:
         """parse_session_db plus a flag that is True only for a complete parse.
 
@@ -855,7 +898,9 @@ class AntigravityParser:
                 min(state.known_models) if state.known_models else _DEFAULT_MODEL
             )
 
-            found_title = _extract_title(cursor, db_path)
+            if summary_titles is None:
+                summary_titles = _load_summary_titles(os.path.dirname(os.path.abspath(db_path)))
+            found_title = summary_titles.get(session_id) or _extract_title(cursor, db_path)
             if found_title:
                 state.title = found_title
 
