@@ -246,3 +246,93 @@ class UsageAggregator:
             "cache_hit_rate": total_usage.cache_hit_rate,
             "models": models,
         }
+
+
+def compute_live_window_start(
+    range_mode: str, now: Optional[datetime] = None
+) -> Optional[datetime]:
+    """Compute the start datetime (inclusive) for a live time range window.
+
+    - "today": today at 00:00:00 local time
+    - "week": most recent Wednesday 00:00:00 (inclusive of Wednesday)
+    - "all": None (all-time, no lower bound)
+    """
+    if range_mode == "all":
+        return None
+    if now is None:
+        now = datetime.now()
+    if range_mode == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif range_mode == "week":
+        # Python weekday: Monday is 0, Wednesday is 2.
+        days_since_wed = (now.weekday() - 2) % 7
+        target = now - timedelta(days=days_since_wed)
+        return target.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        raise ValueError(f"Unknown range_mode: {range_mode!r}")
+
+
+def filter_sessions_since(
+    sessions: List[SessionSummary], start_dt: Optional[datetime]
+) -> List[SessionSummary]:
+    """Return a read-only sliced list of sessions falling within or overlapping [start_dt, now].
+
+    Never mutates the input SessionSummary instances or their steps.
+    """
+    if start_dt is None:
+        return list(sessions)
+
+    result: List[SessionSummary] = []
+    for s in sessions:
+        # Fast-skip: session ended before the window and has no steps at/after start_dt
+        if s.end_time is not None and s.end_time < start_dt:
+            if not s.steps or not any(st.timestamp >= start_dt for st in s.steps):
+                continue
+
+        # Zero-copy pass-through: session started within the window
+        if s.start_time is not None and s.start_time >= start_dt:
+            result.append(s)
+            continue
+
+        # Boundary-crossing session with steps: slice steps and reconstruct
+        if s.steps:
+            filtered_steps = [st for st in s.steps if st.timestamp >= start_dt]
+            if not filtered_steps:
+                continue
+
+            u = TokenUsage()
+            model_tokens: Dict[str, int] = {}
+            first_seen: Dict[str, int] = {}
+            for idx, st in enumerate(filtered_steps):
+                u = u.add(st.usage)
+                m = st.model
+                if m not in first_seen:
+                    first_seen[m] = idx
+                model_tokens[m] = model_tokens.get(m, 0) + st.usage.total_tokens
+
+            ordered_models = sorted(
+                model_tokens.keys(),
+                key=lambda m: (-model_tokens[m], first_seen[m]),
+            )
+
+            new_s = SessionSummary(
+                session_id=s.session_id,
+                source=s.source,
+                file_path=s.file_path,
+                title=s.title,
+                workspace=s.workspace,
+                models=ordered_models,
+                start_time=filtered_steps[0].timestamp,
+                end_time=filtered_steps[-1].timestamp,
+                step_count=len(filtered_steps),
+                usage=u,
+                steps=filtered_steps,
+            )
+            result.append(new_s)
+        else:
+            # Step-less session: keep if start_time is at or after start_dt
+            if s.start_time is not None and s.start_time >= start_dt:
+                result.append(s)
+
+    return result
+

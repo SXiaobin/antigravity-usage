@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Callable, List, Optional
 
 from agy_usage import __version__
-from agy_usage.aggregator import UsageAggregator
+from agy_usage.aggregator import UsageAggregator, compute_live_window_start, filter_sessions_since
 from agy_usage.cache import SessionCache
 from agy_usage.display import (
     Colors,
@@ -45,7 +45,7 @@ from agy_usage.limits import (
     parse_token_amount,
     render_remaining_bar,
 )
-from agy_usage.models import SessionSummary
+from agy_usage.models import CostBreakdown, SessionSummary, TokenUsage
 from agy_usage.parser import AntigravityParser
 
 
@@ -275,6 +275,17 @@ Examples:
         default=None,
         help="Display last N turns in a log table (0 for all turns)",
     )
+    sub_session.add_argument(
+        "--watch",
+        action="store_true",
+        help="Live watch mode: automatically refresh session metrics",
+    )
+    sub_session.add_argument(
+        "--interval",
+        type=int,
+        default=3,
+        help="Refresh interval in seconds (default: 3)",
+    )
 
     # 6. weekly
     subparsers.add_parser(
@@ -301,6 +312,30 @@ Examples:
         type=int,
         default=3,
         help="Refresh interval in seconds (default: 3)",
+    )
+    range_group = sub_live.add_mutually_exclusive_group()
+    range_group.add_argument(
+        "--today",
+        action="store_true",
+        help="Show activity for today (since 00:00:00, default)",
+    )
+    range_group.add_argument(
+        "--week",
+        action="store_true",
+        help="Show activity for current week (since Wednesday 00:00:00)",
+    )
+    range_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Show all-time activity (legacy live mode)",
+    )
+    sub_live.add_argument(
+        "-n",
+        "-l",
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum recent sessions to display (0 for all, default: 10)",
     )
 
     # 10. limits
@@ -401,19 +436,12 @@ def _require_sessions(sessions: List[SessionSummary]) -> bool:
     return False
 
 
-def cmd_overview(sessions: List[SessionSummary], args: argparse.Namespace) -> int:
-    """Display default dashboard overview."""
-    if not _require_sessions(sessions):
-        return 1
-
-    daily_data = UsageAggregator.aggregate_daily(sessions)
-    summary = UsageAggregator.compute_summary(sessions, daily_data=daily_data)
+def _render_kpi_cards(summary: dict) -> None:
     u = summary["total_usage"]
     tot_cost_bd = summary["total_cost"]
     bill_c = tot_cost_bd.billable
     tot_c = tot_cost_bd.total
 
-    # 1. Header & KPI Cards
     card1 = (
         "TOTAL PROCESSED",
         Colors.bold(Colors.green(format_tokens(u.total_tokens))),
@@ -437,6 +465,99 @@ def cmd_overview(sessions: List[SessionSummary], args: argparse.Namespace) -> in
     )
 
     print(render_kpi_grid([card1, card2, card3, card4]))
+
+
+def _render_model_table(models: list) -> None:
+    if not models:
+        return
+    m_headers = ["Model", "Requests", "Prompt", "Cached", "Output", "Total", "Share", "Cost", "Cache %"]
+    m_rows = []
+    for m in models:
+        mu = m.usage
+        m_cost = m.cost.total
+        m_rows.append([
+            Colors.bold(m.model_name),
+            f"{m.request_count:,}",
+            format_tokens(mu.prompt_tokens),
+            format_tokens(mu.cached_tokens),
+            format_tokens(mu.output_tokens),
+            Colors.bold(format_tokens(mu.total_tokens)),
+            f"{m.percentage_of_total:.1f}%",
+            format_cost(m_cost),
+            format_percent(mu.cache_hit_rate),
+        ])
+    print(render_table(m_headers, m_rows, alignments=["left", "right", "right", "right", "right", "right", "right", "right", "right"], title="MODEL TOKEN USAGE"))
+
+
+def _render_recent_sessions(
+    sessions: List[SessionSummary],
+    limit: int = 8,
+    include_cost: bool = False,
+    sort_by_last_active: bool = False,
+) -> None:
+    if not sessions:
+        return
+
+    if sort_by_last_active:
+        def last_active_key(s: SessionSummary):
+            ts = s.end_time or s.start_time
+            return (ts is not None, ts.timestamp() if ts else 0)
+
+        ordered_sessions = sorted(sessions, key=last_active_key, reverse=True)
+    else:
+        ordered_sessions = sessions
+
+    if include_cost:
+        recent_headers = ["ID", "Src", "Workspace", "Title", "Model", "Cached", "Total", "Cache %", "Est. Cost", "Started"]
+        alignments = ["left", "center", "left", "left", "left", "right", "right", "right", "right", "right"]
+    else:
+        recent_headers = ["ID", "Src", "Workspace", "Title", "Model", "Cached", "Total", "Cache %", "Started"]
+        alignments = ["left", "center", "left", "left", "left", "right", "right", "right", "right"]
+
+    recent_rows = []
+    selected = ordered_sessions if limit <= 0 else ordered_sessions[:limit]
+    for s in selected:
+        su = s.usage
+        started_str = s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "N/A"
+        if include_cost:
+            recent_rows.append([
+                Colors.cyan(s.short_id),
+                Colors.dim(s.source.upper()),
+                truncate_ansi(s.workspace, 14),
+                truncate_ansi(s.title, 35),
+                s.primary_model.replace("gemini-", ""),
+                format_tokens(su.cached_tokens),
+                Colors.bold(format_tokens(su.total_tokens)),
+                format_percent(su.cache_hit_rate),
+                format_cost(s.cost.total),
+                Colors.dim(started_str),
+            ])
+        else:
+            recent_rows.append([
+                Colors.cyan(s.short_id),
+                Colors.dim(s.source.upper()),
+                truncate_ansi(s.workspace, 14),
+                truncate_ansi(s.title, 35),
+                s.primary_model.replace("gemini-", ""),
+                format_tokens(su.cached_tokens),
+                Colors.bold(format_tokens(su.total_tokens)),
+                format_percent(su.cache_hit_rate),
+                Colors.dim(started_str),
+            ])
+
+    print(render_table(recent_headers, recent_rows, alignments=alignments, title="RECENT SESSIONS"))
+
+
+def cmd_overview(sessions: List[SessionSummary], args: argparse.Namespace) -> int:
+    """Display default dashboard overview."""
+    if not _require_sessions(sessions):
+        return 1
+
+    daily_data = UsageAggregator.aggregate_daily(sessions)
+    summary = UsageAggregator.compute_summary(sessions, daily_data=daily_data)
+
+    # 1. Header & KPI Cards
+    _render_kpi_cards(summary)
     print()
 
     # 2. GitHub Heatmap (last 16 weeks)
@@ -446,45 +567,12 @@ def cmd_overview(sessions: List[SessionSummary], args: argparse.Namespace) -> in
     print()
 
     # 3. Model Breakdown Table
-    models = summary["models"]
-    if models:
-        m_headers = ["Model", "Requests", "Prompt", "Cached", "Output", "Total", "Share", "Cost", "Cache %"]
-        m_rows = []
-        for m in models:
-            mu = m.usage
-            m_cost = m.cost.total
-            m_rows.append([
-                Colors.bold(m.model_name),
-                f"{m.request_count:,}",
-                format_tokens(mu.prompt_tokens),
-                format_tokens(mu.cached_tokens),
-                format_tokens(mu.output_tokens),
-                Colors.bold(format_tokens(mu.total_tokens)),
-                f"{m.percentage_of_total:.1f}%",
-                format_cost(m_cost),
-                format_percent(mu.cache_hit_rate),
-            ])
-        print(render_table(m_headers, m_rows, alignments=["left", "right", "right", "right", "right", "right", "right", "right", "right"], title="MODEL TOKEN USAGE"))
+    _render_model_table(summary["models"])
+    if summary["models"]:
         print()
 
     # 4. Recent Sessions Table
-    recent_headers = ["ID", "Src", "Workspace", "Title", "Model", "Cached", "Total", "Cache %", "Started"]
-    recent_rows = []
-    for s in sessions[:8]:
-        su = s.usage
-        started_str = s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "N/A"
-        recent_rows.append([
-            Colors.cyan(s.short_id),
-            Colors.dim(s.source.upper()),
-            truncate_ansi(s.workspace, 14),
-            truncate_ansi(s.title, 35),
-            s.primary_model.replace("gemini-", ""),
-            format_tokens(su.cached_tokens),
-            Colors.bold(format_tokens(su.total_tokens)),
-            format_percent(su.cache_hit_rate),
-            Colors.dim(started_str),
-        ])
-    print(render_table(recent_headers, recent_rows, alignments=["left", "center", "left", "left", "left", "right", "right", "right", "right"], title="RECENT SESSIONS"))
+    _render_recent_sessions(sessions, limit=8, include_cost=False, sort_by_last_active=False)
     return 0
 
 
@@ -862,6 +950,41 @@ def cmd_models(sessions: List[SessionSummary]) -> int:
     return 0
 
 
+def _run_watch_loop(
+    args: argparse.Namespace,
+    interval: int,
+    render_fn: Callable[[List[SessionSummary], int], Optional[int]],
+    stop_message: str = "Live monitor stopped.",
+) -> int:
+    """Shared refresh loop for live monitoring views (live, session --watch)."""
+    args._session_cache = SessionCache.load()
+    try:
+        prev_override = Colors.get_override()
+        Colors.set_override(Colors.enabled())
+        try:
+            tick = 0
+            while True:
+                sessions = get_sessions(args)
+                frame_buf = io.StringIO()
+                with redirect_stdout(frame_buf):
+                    ret = render_fn(sessions, tick)
+                if ret is not None and ret != 0:
+                    return ret
+                sys.stdout.write("\033[2J\033[H" + frame_buf.getvalue())
+                sys.stdout.flush()
+                tick += 1
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print()
+            print(Colors.dim(stop_message))
+        finally:
+            Colors.set_override(prev_override)
+    finally:
+        if hasattr(args, "_session_cache"):
+            del args._session_cache
+    return 0
+
+
 def cmd_live(args: argparse.Namespace) -> int:
     """Live monitor mode."""
     if getattr(args, "csv", False):
@@ -874,45 +997,126 @@ def cmd_live(args: argparse.Namespace) -> int:
     interval = max(1, getattr(args, "interval", 3))
     is_json = getattr(args, "json", False)
 
-    # Load the session cache once per run and reuse it on every tick
-    args._session_cache = SessionCache.load()
-    try:
-        if is_json:
+    if getattr(args, "week", False):
+        range_mode = "week"
+    elif getattr(args, "all", False):
+        range_mode = "all"
+    else:
+        range_mode = "today"
+
+    if is_json:
+        args._session_cache = SessionCache.load()
+        try:
             try:
                 while True:
                     sessions = get_sessions(args)
-                    sys.stdout.write(UsageExporter.to_json(sessions, indent=None) + "\n")
+                    now = datetime.now()
+                    start_dt = compute_live_window_start(range_mode, now)
+                    sliced = filter_sessions_since(sessions, start_dt)
+                    sys.stdout.write(UsageExporter.to_json(sliced, indent=None) + "\n")
                     sys.stdout.flush()
                     time.sleep(interval)
             except KeyboardInterrupt:
                 pass
             return 0
-
-        print(Colors.cyan(f"Starting Antigravity Usage live monitor (refreshing every {interval}s). Press Ctrl+C to exit."))
-        prev_override = Colors.get_override()
-        Colors.set_override(Colors.enabled())
-        try:
-            try:
-                while True:
-                    sessions = get_sessions(args)
-                    frame_buf = io.StringIO()
-                    with redirect_stdout(frame_buf):
-                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        print(f"{Colors.bold(Colors.cyan('ANTIGRAVITY LIVE MONITOR'))}  {Colors.dim(f'Last updated: {now_str}')}")
-                        print()
-                        cmd_overview(sessions, args)
-
-                    sys.stdout.write("\033[2J\033[H" + frame_buf.getvalue())
-                    sys.stdout.flush()
-                    time.sleep(interval)
-            except KeyboardInterrupt:
-                print()
-                print(Colors.dim("Live monitor stopped."))
         finally:
-            Colors.set_override(prev_override)
-    finally:
-        del args._session_cache
-    return 0
+            if hasattr(args, "_session_cache"):
+                del args._session_cache
+
+    def render_live_tick(sessions: List[SessionSummary], tick: int) -> int:
+        now = datetime.now()
+        start_dt = compute_live_window_start(range_mode, now)
+
+        if not sessions:
+            _require_sessions(sessions)
+
+        sliced_sessions = filter_sessions_since(sessions, start_dt)
+
+        if range_mode == "today":
+            win_label = f"Today: {start_dt.strftime('%Y-%m-%d 00:00')} ~ now"
+        elif range_mode == "week":
+            win_label = f"Week (Wed+): {start_dt.strftime('%Y-%m-%d 00:00')} ~ now"
+        else:
+            win_label = "All Time"
+
+        now_str = now.strftime("%H:%M:%S")
+        print(f"{Colors.bold(Colors.color('ANTIGRAVITY LIVE MONITOR', Colors.CYAN))}  [{win_label}]  {Colors.dim(f'Last updated: {now_str}')}")
+        print()
+
+        if not sliced_sessions:
+            zero_summary = {
+                "session_count": 0,
+                "step_count": 0,
+                "active_days": 0,
+                "unique_workspaces_count": 0,
+                "earliest_date": None,
+                "latest_date": None,
+                "total_usage": TokenUsage(),
+                "total_cost": CostBreakdown(),
+                "cache_hit_rate": 0.0,
+                "models": [],
+            }
+            _render_kpi_cards(zero_summary)
+            print()
+            print(Colors.dim("No activity recorded in this window yet. Waiting for new prompts..."))
+            return 0
+
+        daily_data = UsageAggregator.aggregate_daily(sliced_sessions)
+        summary = UsageAggregator.compute_summary(sliced_sessions, daily_data=daily_data)
+        _render_kpi_cards(summary)
+        print()
+
+        if summary["models"]:
+            _render_model_table(summary["models"])
+            print()
+
+        _render_recent_sessions(
+            sliced_sessions,
+            limit=getattr(args, "limit", 10),
+            include_cost=True,
+            sort_by_last_active=True,
+        )
+        return 0
+
+    print(
+        Colors.cyan(
+            f"Starting Antigravity Usage live monitor (refreshing every {interval}s). Press Ctrl+C to exit."
+        )
+    )
+    return _run_watch_loop(args, interval, render_live_tick)
+
+
+def cmd_session_watch(args: argparse.Namespace) -> int:
+    """Watch mode for session inspection."""
+    if getattr(args, "csv", False):
+        print(
+            "agy-usage session: error: --csv is not supported by '--watch'",
+            file=sys.stderr,
+        )
+        return 2
+
+    interval = max(1, getattr(args, "interval", 3))
+    session_id_arg = getattr(args, "session_id", "current")
+
+    def render_session_tick(sessions: List[SessionSummary], tick: int) -> int:
+        now_str = datetime.now().strftime("%H:%M:%S")
+        print(
+            f"{Colors.bold(Colors.cyan('ANTIGRAVITY SESSION WATCH'))}  "
+            f"{Colors.dim(f'Last updated: {now_str}  (every {interval}s)')}"
+        )
+        return cmd_session_inspect(
+            sessions,
+            session_id_arg=session_id_arg,
+            turns_limit=getattr(args, "turns", None),
+            show_details=getattr(args, "details", False),
+        )
+
+    return _run_watch_loop(
+        args,
+        interval,
+        render_session_tick,
+        stop_message="Session watch stopped.",
+    )
 
 
 def _window_to_dict(w) -> dict:
@@ -1552,6 +1756,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 'live' refreshes sessions on every tick and manages its own --json/--csv handling
     if sub == "live":
         return cmd_live(args)
+
+    if sub == "session" and getattr(args, "watch", False):
+        return cmd_session_watch(args)
 
     sessions = get_sessions(args)
 
