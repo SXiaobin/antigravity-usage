@@ -98,56 +98,54 @@ class ModelRates:
         return (self.prompt, self.cached, self.output)
 
 
+# Official Google Cloud Model Garden / Vertex AI Non-Global Region API rates
+# (reflecting standard 10% regional data residency premium over global baseline).
 # Pricing schedule: (effective_from, rates). ``None`` means "since launch".
 PricingSchedule = Tuple[Tuple[Optional[date], ModelRates], ...]
 
 _FLASH_3X: PricingSchedule = (
-    # Introductory Flash pricing runs through Dec 31, 2026.
-    (None, ModelRates(0.75, 0.075, 3.75)),
-    (date(2027, 1, 1), ModelRates(1.50, 0.15, 7.50)),
+    # Introductory Flash pricing runs through Dec 31, 2026 ($0.825 / $0.0825 / $4.125 in Non-Global).
+    (None, ModelRates(0.825, 0.0825, 4.125)),
+    (date(2027, 1, 1), ModelRates(1.65, 0.165, 8.25)),
 )
 
-# Official paid-tier (Standard) API rates, verified against
-# https://ai.google.dev/gemini-api/docs/pricing and
-# https://docs.anthropic.com/en/docs/about-claude/pricing on 2026-10-18.
+# Non-Global Region API rates (Google Cloud Model Garden / Agent Platform Non-Global).
 # Keys are matched as substrings of the model name; the LONGEST matching key wins,
 # so e.g. "gemini-2.5-flash-lite" never falls through to "gemini-2.5-flash".
 MODEL_PRICING: Dict[str, PricingSchedule] = {
     # Gemini 4 Argon: introductory pricing through Nov 30, 2026 (implicit caching only).
     "gemini-4-argon": (
-        (None, ModelRates(2.00, 0.10, 10.00)),
-        (date(2026, 12, 1), ModelRates(4.00, 0.20, 20.00)),
+        (None, ModelRates(2.20, 0.11, 11.00)),
+        (date(2026, 12, 1), ModelRates(4.40, 0.22, 22.00)),
     ),
     "gemini-3.8-flash": _FLASH_3X,
     # gemini-3.7-flash is no longer listed on the pricing page; it was billed at the
     # same introductory Flash 3.x schedule as 3.6 / 3.8.
     "gemini-3.7-flash": _FLASH_3X,
     "gemini-3.6-flash": _FLASH_3X,
-    "gemini-3.5-flash-lite": ((None, ModelRates(0.30, 0.03, 2.50)),),
-    "gemini-3.5-flash": ((None, ModelRates(0.50, 0.05, 3.00)),),
-    "gemini-3.1-flash-lite": ((None, ModelRates(0.25, 0.025, 1.50)),),
-    "gemini-3.1-flash": ((None, ModelRates(0.50, 0.05, 3.00)),),
-    "gemini-3-flash": ((None, ModelRates(0.50, 0.05, 3.00)),),
+    "gemini-3.5-flash-lite": ((None, ModelRates(0.33, 0.033, 2.75)),),
+    "gemini-3.5-flash": ((None, ModelRates(0.55, 0.055, 3.30)),),
+    "gemini-3.1-flash-lite": ((None, ModelRates(0.275, 0.0275, 1.65)),),
+    "gemini-3.1-flash": ((None, ModelRates(0.55, 0.055, 3.30)),),
+    "gemini-3-flash": ((None, ModelRates(0.55, 0.055, 3.30)),),
     "gemini-3.1-pro": (
-        (None, ModelRates(2.00, 0.20, 12.00, 200_000, 4.00, 0.40, 18.00)),
+        (None, ModelRates(2.20, 0.22, 13.20, 200_000, 4.40, 0.44, 19.80)),
     ),
     "gemini-2.5-pro": (
-        (None, ModelRates(1.25, 0.125, 10.00, 200_000, 2.50, 0.25, 15.00)),
+        (None, ModelRates(1.375, 0.1375, 11.00, 200_000, 2.75, 0.275, 16.50)),
     ),
-    "gemini-2.5-flash-lite": ((None, ModelRates(0.10, 0.01, 0.40)),),
-    "gemini-2.5-flash": ((None, ModelRates(0.30, 0.03, 2.50)),),
-    "gemini-2.0-flash": ((None, ModelRates(0.10, 0.025, 0.40)),),
+    "gemini-2.5-flash-lite": ((None, ModelRates(0.11, 0.011, 0.44)),),
+    "gemini-2.5-flash": ((None, ModelRates(0.33, 0.033, 2.75)),),
+    "gemini-2.0-flash": ((None, ModelRates(0.11, 0.0275, 0.44)),),
     # Legacy 1.5 models (historical <=128k rates).
-    "gemini-1.5-flash": ((None, ModelRates(0.075, 0.01875, 0.30)),),
-    "gemini-1.5-pro": ((None, ModelRates(1.25, 0.3125, 5.00)),),
-    # Anthropic & OpenAI partner models served in Antigravity. Cache reads on Opus/Sonnet 5.5
-    # are billed at 5% of the input price. Antigravity's usage metadata does not
-    # expose cache-write tokens, so cache-write premiums are not modelled.
-    "claude-opus-5-5": ((None, ModelRates(4.00, 0.20, 20.00)),),
-    "claude-opus-5.5": ((None, ModelRates(4.00, 0.20, 20.00)),),
-    "claude-sonnet-5-5": ((None, ModelRates(2.00, 0.10, 10.00)),),
-    "claude-sonnet-5.5": ((None, ModelRates(2.00, 0.10, 10.00)),),
-    "gpt-oss-120b": ((None, ModelRates(0.50, 0.05, 2.00)),),
+    "gemini-1.5-flash": ((None, ModelRates(0.0825, 0.020625, 0.33)),),
+    "gemini-1.5-pro": ((None, ModelRates(1.375, 0.34375, 5.50)),),
+    # Anthropic & OpenAI partner models served in Model Garden / Antigravity Non-Global.
+    "claude-opus-5-5": ((None, ModelRates(4.40, 0.22, 22.00)),),
+    "claude-opus-5.5": ((None, ModelRates(4.40, 0.22, 22.00)),),
+    "claude-sonnet-5-5": ((None, ModelRates(2.20, 0.11, 11.00)),),
+    "claude-sonnet-5.5": ((None, ModelRates(2.20, 0.11, 11.00)),),
+    "gpt-oss-120b": ((None, ModelRates(0.55, 0.055, 2.20)),),
 }
 
 # Family-level fallbacks for model names that don't match an exact key above.

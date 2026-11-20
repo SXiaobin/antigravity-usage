@@ -73,14 +73,14 @@ class TestSessionInspect(unittest.TestCase):
     def test_calculate_cost_and_format(self):
         from agy_usage.models import calculate_cost
         from agy_usage.display import format_cost
-        # 1M prompt @ $0.75, 1M cache @ $0.075, 1M output @ $3.75
+        # Non-Global: 1M prompt @ $0.825, 1M cache @ $0.0825, 1M output @ $4.125
         p_c, c_c, o_c, tot = calculate_cost(1_000_000, 1_000_000, 1_000_000, "gemini-3.8-flash")
-        self.assertAlmostEqual(p_c, 0.75)
-        self.assertAlmostEqual(c_c, 0.075)
-        self.assertAlmostEqual(o_c, 3.75)
-        self.assertAlmostEqual(tot, 4.575)
+        self.assertAlmostEqual(p_c, 0.825)
+        self.assertAlmostEqual(c_c, 0.0825)
+        self.assertAlmostEqual(o_c, 4.125)
+        self.assertAlmostEqual(tot, 5.0325)
 
-        self.assertEqual(format_cost(4.575), "$4.58")
+        self.assertEqual(format_cost(5.0325), "$5.03")
         self.assertEqual(format_cost(0.005), "$0.005")
         self.assertEqual(format_cost(0.0), "$0.00")
 

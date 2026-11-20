@@ -74,8 +74,8 @@ def _limits_args(**overrides) -> argparse.Namespace:
 
 class TestTokensForBudget(unittest.TestCase):
     def test_all_uncached_opus_input(self):
-        # Opus non-cached input is $4.00 / 1M tokens.
-        self.assertEqual(tokens_for_budget(4.0, "claude-opus-5-5", TokenUsage(prompt_tokens=1)), 1_000_000)
+        # Opus non-cached input in Non-Global is $4.40 / 1M tokens.
+        self.assertEqual(tokens_for_budget(4.4, "claude-opus-5-5", TokenUsage(prompt_tokens=1)), 1_000_000)
 
     def test_sonnet_gets_twice_the_opus_tokens_at_any_mix(self):
         for mix in (

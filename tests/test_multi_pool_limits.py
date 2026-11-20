@@ -134,8 +134,8 @@ class TestMultiPoolLimitsAndArgon(unittest.TestCase):
         # Gemini 5h cycle [11:04:51, 16:04:51) has expired -> 0 tokens in active 5h window, 100% remaining
         self.assertEqual(pools.gemini_5h.usage.total_tokens, 0)
         self.assertEqual(round(pools.gemini_5h.pct_remaining), 100)
-        # Argon weekly cost ($3.9063 / $13.31) -> 71% remaining
-        self.assertEqual(round(pools.argon_7d.pct_remaining), 71)
+        # Argon weekly cost in Non-Global ($4.2969 / $13.31) -> 68% remaining
+        self.assertEqual(round(pools.argon_7d.pct_remaining), 68)
 
     def test_gemini_38_flash_grouping(self):
         from agy_usage.models import normalize_model_name

@@ -165,11 +165,11 @@ class TestPoolSinglePass(unittest.TestCase):
 
         # (window, cost, start, end, limit_tokens, pct_remaining)
         golden = [
-            (pools.gemini_5h, 9.0, datetime(2026, 10, 18, 12, 0), datetime(2026, 10, 18, 17, 0), 100_000_000, 88.0),
-            (pools.gemini_7d, 9.0, datetime(2026, 10, 18, 12, 0), datetime(2026, 10, 25, 12, 0), 750_000_000, 98.4),
-            (pools.argon_7d, 30.0, datetime(2026, 10, 18, 12, 30), datetime(2026, 10, 25, 12, 30), 15_000_000, 0.0),
-            (pools.claude_5h, 48.0, datetime(2026, 10, 18, 13, 0), datetime(2026, 10, 18, 18, 0), 3_450_000, 0.0),
-            (pools.claude_7d, 48.0, datetime(2026, 10, 18, 13, 0), datetime(2026, 10, 25, 13, 0), 6_910_000, 0.0),
+            (pools.gemini_5h, 9.9, datetime(2026, 10, 18, 12, 0), datetime(2026, 10, 18, 17, 0), 100_000_000, 88.0),
+            (pools.gemini_7d, 9.9, datetime(2026, 10, 18, 12, 0), datetime(2026, 10, 25, 12, 0), 750_000_000, 98.4),
+            (pools.argon_7d, 33.0, datetime(2026, 10, 18, 12, 30), datetime(2026, 10, 25, 12, 30), 15_000_000, 0.0),
+            (pools.claude_5h, 52.8, datetime(2026, 10, 18, 13, 0), datetime(2026, 10, 18, 18, 0), 3_450_000, 0.0),
+            (pools.claude_7d, 52.8, datetime(2026, 10, 18, 13, 0), datetime(2026, 10, 25, 13, 0), 6_910_000, 0.0),
         ]
         for w, cost, start, end, limit_tokens, pct_remaining in golden:
             with self.subTest(window=w.window_name):
