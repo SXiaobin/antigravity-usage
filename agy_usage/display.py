@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 from typing import Any, List, Optional, Tuple
 
 # Module-level color switch (BUG-004). None = auto-detect via Colors.enabled();
@@ -284,14 +285,14 @@ def render_table(
 
     # Calculate max column widths
     str_rows: List[List[Tuple[str, int]]] = []
-    col_widths = [len(h) for h in headers]
+    col_widths = [display_width(h) for h in headers]
 
     for row in rows:
         row_strs = []
         for i, cell in enumerate(row):
             s = str(cell)
-            # Strip ANSI escape codes when computing visual string width
-            visible_len = len(strip_ansi(s))
+            # Strip ANSI escape codes and account for wide (CJK/fullwidth) characters
+            visible_len = display_width(s)
             if visible_len > col_widths[i]:
                 col_widths[i] = visible_len
             row_strs.append((s, visible_len))
@@ -313,7 +314,7 @@ def render_table(
     lines: List[str] = []
 
     if title:
-        lines.append(Colors.bold(Colors.cyan(f"── {title} " + "─" * max(0, sum(col_widths) + (num_cols * 3) - len(title) - 4))))
+        lines.append(Colors.bold(Colors.cyan(f"── {title} " + "─" * max(0, sum(col_widths) + (num_cols * 3) - display_width(title) - 4))))
 
     lines.append(Colors.dim(top_border))
 
@@ -327,7 +328,7 @@ def render_table(
             # is odd, unlike _pad; keep it so header bytes stay unchanged.
             padded = h.center(w)
         else:
-            padded = _pad(h, len(h), w, align)
+            padded = _pad(h, display_width(h), w, align)
         h_cells.append(f" {Colors.bold(padded)} ")
     lines.append(f"{Colors.dim(VERT)}{f'{Colors.dim(VERT)}'.join(h_cells)}{Colors.dim(VERT)}")
     lines.append(Colors.dim(mid_border))
@@ -364,28 +365,44 @@ def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def _char_width(ch: str) -> int:
+    """Return terminal display column width for a single character."""
+    if unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def display_width(text: str) -> int:
+    """Compute terminal display width of text (ANSI-stripped, CJK wide chars = 2)."""
+    return sum(_char_width(ch) for ch in strip_ansi(text))
+
+
 def truncate_ansi(text: str, max_visible: int) -> str:
-    """Truncate a string to max_visible printable characters while preserving ANSI codes."""
+    """Truncate a string to max_visible display columns while preserving ANSI codes."""
     if max_visible <= 0:
         return ""
-    vis_len = len(strip_ansi(text))
+    vis_len = display_width(text)
     if vis_len <= max_visible:
         return text
 
-    target_chars = max(0, max_visible - 1)
+    target_cols = max(0, max_visible - 1)
     out: List[str] = []
     vis_count = 0
     has_ansi = False
     pos = 0
-    while pos < len(text) and vis_count < target_chars:
+    while pos < len(text):
         m = _ANSI_RE.match(text, pos)
         if m:
             out.append(m.group(0))
             has_ansi = True
             pos = m.end()
         else:
-            out.append(text[pos])
-            vis_count += 1
+            ch = text[pos]
+            ch_w = _char_width(ch)
+            if vis_count + ch_w > target_cols:
+                break
+            out.append(ch)
+            vis_count += ch_w
             pos += 1
 
     if has_ansi:
@@ -403,7 +420,7 @@ def render_kpi_card(title: str, value: str, subtext: str = "", width: int = 26) 
     def pad_line(content: str) -> str:
         max_content = width - 4
         content = truncate_ansi(content, max_content)
-        vis_len = len(strip_ansi(content))
+        vis_len = display_width(content)
         padding = " " * max(0, width - 3 - vis_len)
         return f"│ {content}{padding}│"
 
