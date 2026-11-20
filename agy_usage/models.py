@@ -113,6 +113,13 @@ _FLASH_3X: PricingSchedule = (
 # Keys are matched as substrings of the model name; the LONGEST matching key wins,
 # so e.g. "gemini-2.5-flash-lite" never falls through to "gemini-2.5-flash".
 MODEL_PRICING: Dict[str, PricingSchedule] = {
+    # Gemini 4 family (Non-Global Region API rates).
+    "gemini-4-neon": ((None, ModelRates(3.30, 0.165, 16.50)),),
+    "gemini-4-hydrogen": ((None, ModelRates(1.65, 0.0825, 8.25)),),
+    "gemini-4-carbon": (
+        (None, ModelRates(2.20, 0.11, 11.00)),
+        (date(2026, 12, 1), ModelRates(4.40, 0.22, 22.00)),
+    ),
     # Gemini 4 Argon: introductory pricing through Nov 30, 2026 (implicit caching only).
     "gemini-4-argon": (
         (None, ModelRates(2.20, 0.11, 11.00)),
@@ -150,6 +157,9 @@ MODEL_PRICING: Dict[str, PricingSchedule] = {
 
 # Family-level fallbacks for model names that don't match an exact key above.
 _FAMILY_FALLBACKS: Tuple[Tuple[str, str], ...] = (
+    ("neon", "gemini-4-neon"),
+    ("hydrogen", "gemini-4-hydrogen"),
+    ("carbon", "gemini-4-carbon"),
     ("argon", "gemini-4-argon"),
     ("claude-opus", "claude-opus-5-5"),
     ("claude", "claude-sonnet-5-5"),

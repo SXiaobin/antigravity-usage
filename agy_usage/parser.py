@@ -160,6 +160,8 @@ KNOWN_MODEL_ENUMS: Dict[int, str] = {
     1418: "gemini-4-argon-trial",
     419: "gemini-4-argon-trial",
     1419: "gemini-4-argon-trial",
+    462: "gemini-4-hydrogen",
+    1462: "gemini-4-hydrogen",
 }
 
 
@@ -405,7 +407,7 @@ def _read_gen_metadata(cursor: sqlite3.Cursor, tables: Set[str], state: _ParseSt
         return
     gm_rows: List[Tuple[int, str, Optional[int]]] = []
     try:
-        cursor.execute("SELECT idx, data FROM gen_metadata WHERE size > 0 ORDER BY idx ASC")
+        cursor.execute("SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL AND length(data) > 0 ORDER BY idx ASC")
         for row_idx, data in cursor.fetchall():
             if not data:
                 continue
