@@ -655,10 +655,16 @@ class LimitsCalculator:
 
         Each step, or each step-less session (timestamped by its start/end), is
         classified exactly once. Timestamps are stripped of their timezone.
+        Duplicate requests across branched sessions are deduplicated by request_id.
         """
+        seen_requests: set[str] = set()
         for s in sessions:
             if s.steps:
                 for step in s.steps:
+                    if step.request_id:
+                        if step.request_id in seen_requests:
+                            continue
+                        seen_requests.add(step.request_id)
                     st_ts = step.timestamp
                     if st_ts.tzinfo:
                         st_ts = st_ts.replace(tzinfo=None)

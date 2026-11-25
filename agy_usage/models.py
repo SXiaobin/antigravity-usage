@@ -334,6 +334,7 @@ class StepRecord:
     model: str
     usage: TokenUsage
     duration_ms: float = 0.0
+    request_id: Optional[str] = None
 
     @functools.cached_property
     def cost(self) -> CostBreakdown:
@@ -349,6 +350,7 @@ class StepRecord:
             "timestamp": self.timestamp.isoformat(),
             "model": self.model,
             "duration_ms": self.duration_ms,
+            "request_id": self.request_id,
             "usage": self.usage.to_dict(),
             "cost": self.cost.to_dict(),
         }

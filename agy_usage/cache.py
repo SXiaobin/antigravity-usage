@@ -109,6 +109,7 @@ def summary_to_dict(s: SessionSummary) -> dict:
                 step.usage.thought_tokens,
                 step.usage.candidate_tokens,
                 step.duration_ms,
+                step.request_id,
             ]
             for step in s.steps
         ],
@@ -144,6 +145,7 @@ def summary_from_dict(d: dict) -> SessionSummary:
                 candidate_tokens=st[7],
             ),
             duration_ms=st[8],
+            request_id=st[9] if len(st) > 9 else None,
         )
         for st in d.get("steps", [])
     ]

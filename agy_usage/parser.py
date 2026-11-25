@@ -177,6 +177,30 @@ def extract_usage_model_enum(data: bytes) -> Optional[int]:
     return None
 
 
+def extract_usage_request_id(data: bytes) -> Optional[str]:
+    """Extract request / bot turn ID from UsageMetadata (field 7, or fallback field 11)."""
+    try:
+        req_id = None
+        for fnum, _, val in parse_proto_fields(data):
+            if fnum == 7 and isinstance(val, (bytes, bytearray)):
+                try:
+                    s = val.decode("utf-8", errors="replace").strip()
+                    if s:
+                        return s
+                except Exception:
+                    pass
+            elif fnum == 11 and isinstance(val, (bytes, bytearray)) and not req_id:
+                try:
+                    s = val.decode("utf-8", errors="replace").strip()
+                    if s:
+                        req_id = s
+                except Exception:
+                    pass
+        return req_id
+    except Exception:
+        return None
+
+
 def parse_usage_proto(data: bytes) -> TokenUsage:
     """Parse UsageMetadata protobuf message."""
     usage = TokenUsage()
@@ -269,7 +293,7 @@ _UUID_PREFIX_RE = re.compile(
 )
 
 # (idx, timestamp or None, model, usage) for a step that carried token usage.
-_RawStep = Tuple[int, Optional[datetime], str, TokenUsage]
+_RawStep = Tuple[int, Optional[datetime], str, TokenUsage, Optional[str]]
 
 
 @dataclass
@@ -612,7 +636,8 @@ def _parse_step_row(
                 break
 
     step_model = _resolve_step_model(idx, usage_raw, state, gm_anchors, gm_anchor_positions)
-    return idx, step_ts, step_model, step_usage
+    request_id = extract_usage_request_id(usage_raw)
+    return idx, step_ts, step_model, step_usage, request_id
 
 
 def _read_steps(
@@ -669,10 +694,10 @@ def _read_steps(
         session_fallback = min(db_mtime, datetime.now())
 
     filled_timestamps = _fill_missing_step_timestamps(
-        [ts for _, ts, _, _ in raw_steps], fallback=session_fallback
+        [ts for _, ts, _, _, _ in raw_steps], fallback=session_fallback
     )
 
-    for (idx, _, step_model, step_usage), final_ts in zip(raw_steps, filled_timestamps):
+    for (idx, _, step_model, step_usage, req_id), final_ts in zip(raw_steps, filled_timestamps):
         if final_ts is None:
             # No timestamp could be inferred; drop the step
             continue
@@ -685,6 +710,7 @@ def _read_steps(
             timestamp=final_ts,
             model=step_model,
             usage=step_usage,
+            request_id=req_id,
         )
 
         if state.first_ts is None or final_ts < state.first_ts:

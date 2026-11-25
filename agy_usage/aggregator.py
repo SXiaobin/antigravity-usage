@@ -33,10 +33,19 @@ class _UsageUnit(NamedTuple):
 
 
 def _iter_usage_units(sessions: List[SessionSummary]) -> Iterator[_UsageUnit]:
-    """Yield one unit per step, or one for the whole session when it has no steps."""
+    """Yield one unit per step, or one for the whole session when it has no steps.
+
+    Duplicate LLM requests (e.g. from branched / forked conversations that inherit
+    identical history steps) are deduplicated by request_id across sessions.
+    """
+    seen_requests: set[str] = set()
     for s in sessions:
         if s.steps:
             for step in s.steps:
+                if step.request_id:
+                    if step.request_id in seen_requests:
+                        continue
+                    seen_requests.add(step.request_id)
                 yield _UsageUnit(
                     step.timestamp, step.usage, step.cost, s.session_id, step.model, (step.model,), 1
                 )
@@ -216,9 +225,6 @@ class UsageAggregator:
         unique_workspaces = set()
 
         for s in sessions:
-            _add_usage(total_usage, s.usage)
-            _add_cost(total_cost, s.cost)
-            total_steps += s.step_count
             if s.workspace and s.workspace != "Unknown":
                 unique_workspaces.add(s.workspace)
             if s.start_time:
@@ -227,6 +233,11 @@ class UsageAggregator:
             if s.end_time:
                 if latest_ts is None or s.end_time > latest_ts:
                     latest_ts = s.end_time
+
+        for unit in _iter_usage_units(sessions):
+            _add_usage(total_usage, unit.usage)
+            _add_cost(total_cost, unit.cost)
+            total_steps += unit.count
 
         if daily_data is None:
             daily_data = UsageAggregator.aggregate_daily(sessions)
