@@ -98,6 +98,9 @@ def summary_to_dict(s: SessionSummary) -> dict:
             s.usage.thought_tokens,
             s.usage.candidate_tokens,
         ],
+        "parent_session_id": s.parent_session_id,
+        "parent_step_index": s.parent_step_index,
+        "inherited_step_count": s.inherited_step_count,
         "steps": [
             [
                 step.step_idx,
@@ -161,6 +164,9 @@ def summary_from_dict(d: dict) -> SessionSummary:
         step_count=d["step_count"],
         usage=usage,
         steps=steps,
+        parent_session_id=d.get("parent_session_id"),
+        parent_step_index=d.get("parent_step_index"),
+        inherited_step_count=d.get("inherited_step_count", 0),
     )
 
 

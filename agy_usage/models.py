@@ -379,6 +379,9 @@ class SessionSummary:
     step_count: int = 0
     usage: TokenUsage = field(default_factory=TokenUsage)
     steps: List[StepRecord] = field(default_factory=list)
+    parent_session_id: Optional[str] = None
+    parent_step_index: Optional[int] = None
+    inherited_step_count: int = 0
 
     @property
     def primary_model(self) -> str:
@@ -424,6 +427,10 @@ class SessionSummary:
             "usage": self.usage.to_dict(),
             "cost": self.cost.to_dict(),
         }
+        if self.parent_session_id:
+            d["parent_session_id"] = self.parent_session_id
+            d["parent_step_index"] = self.parent_step_index
+            d["inherited_step_count"] = self.inherited_step_count
         if include_steps:
             d["steps"] = [s.to_dict() for s in self.steps]
         return d

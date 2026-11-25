@@ -320,6 +320,9 @@ class _ParseState:
     first_ts: Optional[datetime] = None
     last_ts: Optional[datetime] = None
     validated: bool = False
+    parent_session_id: Optional[str] = None
+    parent_step_index: Optional[int] = None
+    inherited_step_count: int = 0
 
     def build_summary(self) -> SessionSummary:
         """Assemble a summary from everything parsed so far."""
@@ -332,6 +335,12 @@ class _ParseState:
             )
         else:
             models_list = [self.default_model]
+        start_ts = self.first_ts
+        if start_ts is None and self.parent_step_index is None:
+            start_ts = self.start_time_blob
+        end_ts = self.last_ts or start_ts
+        if end_ts is None and self.parent_step_index is None:
+            end_ts = self.start_time_blob
         return SessionSummary(
             session_id=self.session_id,
             source=self.source,
@@ -339,11 +348,14 @@ class _ParseState:
             title=self.title,
             workspace=self.workspace,
             models=models_list,
-            start_time=self.first_ts,
-            end_time=self.last_ts or self.first_ts,
+            start_time=start_ts,
+            end_time=end_ts,
             step_count=len(self.steps),
             usage=self.usage,
             steps=self.steps,
+            parent_session_id=self.parent_session_id,
+            parent_step_index=self.parent_step_index,
+            inherited_step_count=self.inherited_step_count,
         )
 
 
@@ -377,6 +389,44 @@ def _read_trajectory_meta(cursor: sqlite3.Cursor, tables: Set[str], state: _Pars
                         state.start_time_blob = ts
     except _ROW_ERRORS as exc:
         logger.debug("Skipping trajectory_metadata_blob in %s: %s", state.db_path, exc)
+
+
+def _read_parent_references(cursor: sqlite3.Cursor, tables: Set[str], state: _ParseState) -> None:
+    """Stage 1b: detect branched session / side chat parent references (field 6 = parent_session_id, field 2 = parent_step_index)."""
+    if "parent_references" not in tables:
+        return
+    try:
+        cursor.execute("PRAGMA table_info(parent_references)")
+        cols = {row[1] for row in cursor.fetchall()}
+        col = "data" if "data" in cols else ("val" if "val" in cols else None)
+        if not col:
+            return
+        cursor.execute(f"SELECT {col} FROM parent_references WHERE {col} IS NOT NULL")
+        rows = cursor.fetchall()
+    except _ROW_ERRORS as exc:
+        logger.debug("Skipping parent_references in %s: %s", state.db_path, exc)
+        return
+
+    parents: List[Tuple[str, int]] = []
+    for (blob,) in rows:
+        if not isinstance(blob, (bytes, bytearray, memoryview)):
+            continue
+        p_id: Optional[str] = None
+        p_step: Optional[int] = None
+        for fnum, wtype, val in parse_proto_fields(bytes(blob)):
+            if fnum == 6 and wtype == 2 and isinstance(val, bytes):
+                p_id = _decode_text(val)
+            elif fnum == 2 and wtype == 0 and isinstance(val, int):
+                # Varint: 0xFFFFFFFFFFFFFFFF (18446744073709551615) is protobuf signed -1 (placeholder)
+                if 0 < val < 0x7FFFFFFF:
+                    p_step = val
+        if p_id and p_id != state.session_id and p_step is not None:
+            parents.append((p_id, p_step))
+
+    if parents:
+        best_parent_id, best_cutoff = max(parents, key=lambda x: x[1])
+        state.parent_session_id = best_parent_id
+        state.parent_step_index = best_cutoff
 
 
 def _decode_text(value: bytes) -> str:
@@ -688,7 +738,7 @@ def _read_steps(
     # BUG-018: Fill missing timestamps using nearest neighbour inference.
     # If no steps have timestamps, fall back to start_time_blob, or min(db_mtime, now).
     session_fallback: Optional[datetime] = None
-    if state.start_time_blob is not None:
+    if state.parent_step_index is None and state.start_time_blob is not None:
         session_fallback = state.start_time_blob
     elif db_mtime is not None:
         session_fallback = min(db_mtime, datetime.now())
@@ -700,6 +750,10 @@ def _read_steps(
     for (idx, _, step_model, step_usage, req_id), final_ts in zip(raw_steps, filled_timestamps):
         if final_ts is None:
             # No timestamp could be inferred; drop the step
+            continue
+
+        if state.parent_step_index is not None and idx <= state.parent_step_index:
+            state.inherited_step_count += 1
             continue
 
         # Build everything that can raise before mutating any state, so
@@ -911,6 +965,12 @@ class AntigravityParser:
             # Keep the blob start time for partial summaries: a failure in any
             # later stage must not lose the only timestamp already parsed.
             state.first_ts = state.start_time_blob
+
+            _read_parent_references(cursor, tables, state)
+            if state.parent_step_index is not None:
+                # Branched session: start_time_blob belongs to the parent session creation,
+                # so reset first_ts so the first new step after branch defines the start time.
+                state.first_ts = None
 
             _read_gen_metadata(cursor, tables, state)
             gm_anchors: List[Tuple[int, str]] = sorted(

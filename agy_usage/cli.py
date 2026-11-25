@@ -717,6 +717,12 @@ def cmd_session_inspect(
     print(f"  {Colors.bold('Title:')}        {matched.title}")
     print(f"  {Colors.bold('Workspace:')}    {Colors.cyan(matched.workspace)}")
     print(f"  {Colors.bold('Source:')}       {matched.source.upper()} ({Colors.dim(matched.file_path)})")
+    if matched.parent_session_id:
+        p_info = f"{matched.parent_session_id[:8]} (branched at step #{matched.parent_step_index}"
+        if matched.inherited_step_count:
+            p_info += f", {matched.inherited_step_count} inherited steps excluded"
+        p_info += ")"
+        print(f"  {Colors.bold('Branch of:')}    {Colors.cyan(p_info)}")
     print(f"  {Colors.bold('Model(s):')}     {', '.join(matched.models) if matched.models else 'N/A'}")
     started_str = matched.start_time.strftime("%Y-%m-%d %H:%M:%S") if matched.start_time else "N/A"
     ended_str = matched.end_time.strftime("%Y-%m-%d %H:%M:%S") if matched.end_time else "N/A"

@@ -228,6 +228,83 @@ class TestBranchRequestDeduplication(unittest.TestCase):
             self.assertEqual(len(summary.steps), 1)
             self.assertEqual(summary.steps[0].request_id, "bot-test-12345")
 
+    def test_sqlite_parsing_parent_references_filters_inherited_steps(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = os.path.join(tmp_dir, "child_session.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, step_payload BLOB)"
+            )
+            conn.execute("CREATE TABLE parent_references (val BLOB)")
+
+            # Insert 5 steps with distinct timestamps and usages
+            # Steps 1..3: inherited from parent
+            # Steps 4..5: new in child
+            for s_idx in range(1, 6):
+                # Timestamp: 1764000000 + s_idx * 100
+                ts_payload = _make_varint_field(1, 1764000000 + s_idx * 100)
+                f1_ts = _make_bytes_field(1, ts_payload)
+
+                u_f2 = _make_varint_field(2, 1000)
+                u_f3 = _make_varint_field(3, 200)
+                u_f7 = _make_bytes_field(7, f"bot-req-{s_idx}".encode())
+                usage_blob = u_f2 + u_f3 + u_f7
+                f9_usage = _make_bytes_field(9, usage_blob)
+
+                meta_blob = f1_ts + f9_usage
+                conn.execute(
+                    "INSERT INTO steps (idx, step_type, metadata) VALUES (?, 1, ?)",
+                    (s_idx, meta_blob),
+                )
+
+            # Insert parent_references:
+            # 1. Placeholder with uint64 -1 (18446744073709551615) - should be ignored
+            f6_p1 = _make_bytes_field(6, b"dummy-parent")
+            f2_p1 = _make_varint_field(2, 18446744073709551615)
+            conn.execute("INSERT INTO parent_references (val) VALUES (?)", (f6_p1 + f2_p1,))
+
+            # 2. Self reference - should be ignored
+            f6_p2 = _make_bytes_field(6, b"child_session")
+            f2_p2 = _make_varint_field(2, 2)
+            conn.execute("INSERT INTO parent_references (val) VALUES (?)", (f6_p2 + f2_p2,))
+
+            # 3. Valid parent reference: parent_id = "parent-sess-uuid", step cutoff = 3
+            f6_p3 = _make_bytes_field(6, b"parent-sess-uuid")
+            f2_p3 = _make_varint_field(2, 3)
+            conn.execute("INSERT INTO parent_references (val) VALUES (?)", (f6_p3 + f2_p3,))
+
+            conn.commit()
+            conn.close()
+
+            summary, complete = AntigravityParser._parse_session_db_checked(db_path, source="cli")
+            self.assertIsNotNone(summary)
+            self.assertTrue(complete)
+            self.assertEqual(summary.parent_session_id, "parent-sess-uuid")
+            self.assertEqual(summary.parent_step_index, 3)
+            self.assertEqual(summary.inherited_step_count, 3)
+            # Only steps 4 and 5 should be kept in summary
+            self.assertEqual(summary.step_count, 2)
+            self.assertEqual(len(summary.steps), 2)
+            self.assertEqual(summary.steps[0].step_idx, 4)
+            self.assertEqual(summary.steps[1].step_idx, 5)
+            self.assertEqual(summary.usage.prompt_tokens, 2000)
+            self.assertEqual(summary.usage.output_tokens, 400)
+            self.assertEqual(summary.start_time, datetime.fromtimestamp(1764000400))
+            self.assertEqual(summary.end_time, datetime.fromtimestamp(1764000500))
+
+            # Verify cache serialization roundtrip
+            cached = summary_to_dict(summary)
+            self.assertEqual(cached["parent_session_id"], "parent-sess-uuid")
+            self.assertEqual(cached["parent_step_index"], 3)
+            self.assertEqual(cached["inherited_step_count"], 3)
+
+            restored = summary_from_dict(cached)
+            self.assertEqual(restored.parent_session_id, "parent-sess-uuid")
+            self.assertEqual(restored.parent_step_index, 3)
+            self.assertEqual(restored.inherited_step_count, 3)
+            self.assertEqual(restored.step_count, 2)
+            self.assertEqual(len(restored.steps), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
