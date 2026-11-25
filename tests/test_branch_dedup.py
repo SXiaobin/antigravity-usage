@@ -48,17 +48,17 @@ class TestBranchRequestDeduplication(unittest.TestCase):
 
     def test_extract_usage_request_id(self):
         # Field 7: bot-uuid
-        usage_bytes = _make_bytes_field(7, b"bot-40a3f0c3-149a-45ad-87fa-a1a757dcbb23")
+        usage_bytes = _make_bytes_field(7, b"bot-00000000-0000-0000-0000-000000000001")
         self.assertEqual(
             extract_usage_request_id(usage_bytes),
-            "bot-40a3f0c3-149a-45ad-87fa-a1a757dcbb23",
+            "bot-00000000-0000-0000-0000-000000000001",
         )
 
         # Field 11 fallback when Field 7 is absent
-        usage_bytes_f11 = _make_bytes_field(11, b"ybUFa5yOCvy4_sEPt72iqQE")
+        usage_bytes_f11 = _make_bytes_field(11, b"test-fallback-request-id-1")
         self.assertEqual(
             extract_usage_request_id(usage_bytes_f11),
-            "ybUFa5yOCvy4_sEPt72iqQE",
+            "test-fallback-request-id-1",
         )
 
         # Empty / no id
